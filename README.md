@@ -1,5 +1,7 @@
 # Vibration monitoring RAG assistant
 
+[![tests](https://github.com/Sammyjoseph999/vibration-monitoring-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/Sammyjoseph999/vibration-monitoring-rag/actions/workflows/tests.yml)
+
 A retrieval-augmented question-answering assistant for vibration monitoring and condition-monitoring products. It reads a set of web pages (vendor product pages and background articles), indexes them, and answers questions using only what it retrieved, listing the sources behind each answer.
 
 It runs entirely on a laptop with open models, so no API key is required.
@@ -70,6 +72,7 @@ for chunk in result["sources"]:
 ## Tests
 
 ```bash
+pip install -r requirements-test.txt
 pytest
 ```
 
