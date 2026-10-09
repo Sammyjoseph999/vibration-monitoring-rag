@@ -1,0 +1,12 @@
+beautifulsoup4>=4.12
+numpy>=1.26
+pandas>=2.2
+requests>=2.31
+sentence-transformers>=3.0
+transformers>=4.44
+torch>=2.2
+# Optional: only needed when GROQ_API_KEY or OPENAI_API_KEY is set
+openai>=1.50
+# Development
+notebook
+pytest>=8.0
