@@ -69,6 +69,23 @@ for chunk in result["sources"]:
     print(chunk["source"], chunk["url"])
 ```
 
+## Web demo
+
+`app.py` is a small chat interface built with Gradio. It answers each question and lists the passages it used, and keeps each visitor's conversation separate so follow-up questions work.
+
+```bash
+pip install -r requirements-app.txt
+python app.py
+```
+
+It opens at http://127.0.0.1:7860. The first start downloads the two models and the eight pages, which takes a few minutes.
+
+### Deploying it as a Hugging Face Space
+
+1. Create a free account at huggingface.co and a new Space with the **Gradio** SDK and the free CPU hardware.
+2. Upload `app.py`, the `rag/` folder, and `requirements-app.txt` renamed to `requirements.txt`.
+3. The Space builds and starts on its own. Add its link to the top of this README.
+
 ## Tests
 
 ```bash

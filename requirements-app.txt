@@ -1,0 +1,8 @@
+# Dependencies for the web demo (app.py)
+beautifulsoup4>=4.12
+gradio>=5.0
+numpy>=1.26
+requests>=2.31
+sentence-transformers>=3.0
+torch>=2.2
+transformers>=4.44
