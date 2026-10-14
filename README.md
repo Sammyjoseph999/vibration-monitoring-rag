@@ -88,3 +88,7 @@ The 19 tests cover cleaning, chunking, search, prompt construction, generator se
 ## Sources
 
 Vendor pages from Fluke, Erbessd Instruments, Acoem and Emerson, and Wikipedia articles on condition monitoring, predictive maintenance, vibration and accelerometers (CC BY-SA). The repository contains no copy of their text; the notebook shows short excerpts with attribution.
+
+## License
+
+The code is released under the [MIT License](LICENSE). Datasets keep the terms of their original sources, described above.
