@@ -2,6 +2,8 @@
 
 [![tests](https://github.com/Sammyjoseph999/vibration-monitoring-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/Sammyjoseph999/vibration-monitoring-rag/actions/workflows/tests.yml)
 
+**[Try the live demo](https://huggingface.co/spaces/sammyjoseph/vibration-monitoring-assistant)**: runs in your browser, no sign-up or API key.
+
 A retrieval-augmented question-answering assistant for vibration monitoring and condition-monitoring products. It reads a set of web pages (vendor product pages and background articles), indexes them, and answers questions using only what it retrieved, listing the sources behind each answer.
 
 It runs entirely on a laptop with open models, so no API key is required.
@@ -71,20 +73,31 @@ for chunk in result["sources"]:
 
 ## Web demo
 
-`app.py` is a small chat interface built with Gradio. It answers each question and lists the passages it used, and keeps each visitor's conversation separate so follow-up questions work.
+There are two versions of the same assistant: the same sources, chunks, models, prompt and refusal threshold.
+
+### In the browser (the live demo)
+
+`web/index.html` runs both models in the visitor's browser with [Transformers.js](https://huggingface.co/docs/transformers.js), so it can be hosted as a free static page and nothing typed leaves the browser. The passages are embedded in advance by `web/build_index.py`, which uses the same `rag` package as everything else; questions are embedded in the browser with the same model, and the similarity scores match the Python index. The first visit downloads about 370 MB of model files, which the browser then caches.
+
+Two differences from the Python version: answers use greedy decoding rather than beam search, and the answer model is an 8-bit quantised copy of flan-t5-base.
+
+```bash
+python web/build_index.py           # writes web/index.json
+python -m http.server -d web 8000   # then open http://localhost:8000
+```
+
+To publish it, create a Hugging Face Space with the **Static** SDK and upload `web/index.html` and `web/index.json`.
+
+### With Gradio
+
+`app.py` is a chat interface built with Gradio around the Python assistant. It keeps each visitor's conversation separate, so follow-up questions work.
 
 ```bash
 pip install -r requirements-app.txt
 python app.py
 ```
 
-It opens at http://127.0.0.1:7860. The first start downloads the two models and the eight pages, which takes a few minutes.
-
-### Deploying it as a Hugging Face Space
-
-1. Create a free account at huggingface.co and a new Space with the **Gradio** SDK and the free CPU hardware.
-2. Upload `app.py`, the `rag/` folder, and `requirements-app.txt` renamed to `requirements.txt`.
-3. The Space builds and starts on its own. Add its link to the top of this README.
+It opens at http://127.0.0.1:7860. The first start downloads the two models and the eight pages, which takes a few minutes. Gradio Spaces on Hugging Face's free CPU now need a paid account, which is why the live demo is the static version.
 
 ## Tests
 

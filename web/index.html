@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vibration Monitoring Assistant</title>
+<meta name="description" content="Retrieval-augmented question answering over vibration monitoring sources, running entirely in the browser.">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d232b; --muted: #5d6773; --border: #dde2e8;
+    --accent: #1f5fa8; --accent-text: #ffffff; --user: #e8f0fa; --warn: #8a5a00; --code: #eef1f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161b; --panel: #1a2027; --text: #e4e8ec; --muted: #9aa5b1; --border: #2c343e;
+      --accent: #5b9be0; --accent-text: #0b1016; --user: #1f2b3a; --warn: #e0b45b; --code: #232a33;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161b; --panel: #1a2027; --text: #e4e8ec; --muted: #9aa5b1; --border: #2c343e;
+    --accent: #5b9be0; --accent-text: #0b1016; --user: #1f2b3a; --warn: #e0b45b; --code: #232a33;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 1.5rem; margin: 0 0 6px; }
+  .intro { color: var(--muted); margin: 0 0 16px; }
+  .intro a { color: var(--accent); }
+  #status {
+    font-size: 0.9rem; color: var(--muted); background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 16px;
+  }
+  #status.ready { color: var(--text); }
+  progress { width: 100%; height: 6px; margin-top: 6px; accent-color: var(--accent); }
+  #chat { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .msg { border-radius: 10px; padding: 10px 14px; border: 1px solid var(--border); overflow-wrap: anywhere; }
+  .msg.user { background: var(--user); align-self: flex-end; max-width: 85%; }
+  .msg.bot { background: var(--panel); }
+  .msg.bot.none .answer { color: var(--warn); }
+  .sources { margin: 8px 0 0; padding: 0; list-style: none; font-size: 0.85rem; color: var(--muted); }
+  .sources li { margin-top: 6px; padding-left: 10px; border-left: 3px solid var(--border); }
+  .sources a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .score { font-variant-numeric: tabular-nums; }
+  form { display: flex; gap: 8px; }
+  input[type="text"] {
+    flex: 1; min-width: 0; font: inherit; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+  button {
+    font: inherit; border-radius: 8px; border: 1px solid var(--accent); cursor: pointer;
+    background: var(--accent); color: var(--accent-text); padding: 10px 16px;
+  }
+  button.secondary { background: transparent; color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+  #examples button { font-size: 0.85rem; padding: 6px 10px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; }
+  .note { font-size: 0.8rem; color: var(--muted); }
+  footer { margin-top: 28px; font-size: 0.85rem; color: var(--muted); }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Vibration monitoring assistant</h1>
+  <p class="intro">
+    Answers questions about vibration monitoring and condition-monitoring products using only four vendor pages and
+    four Wikipedia articles, and shows the passages behind each answer. It declines questions the sources don't cover.
+    Both models run in your browser; nothing you type is sent to a server.
+  </p>
+
+  <div id="status">Loading the models (about 370 MB on the first visit, cached after that)...
+    <progress id="bar" max="100" value="0"></progress>
+  </div>
+
+  <div id="chat" aria-live="polite"></div>
+
+  <form id="ask">
+    <input id="question" type="text" placeholder="Ask about vibration monitoring..." autocomplete="off" disabled>
+    <button id="send" type="submit" disabled>Ask</button>
+  </form>
+  <div id="examples"></div>
+  <div class="row">
+    <span class="note">Small open models: answers are short and mostly quoted from the sources.</span>
+    <button id="reset" class="secondary" type="button">New conversation</button>
+  </div>
+
+  <footer>
+    Retrieval with all-MiniLM-L6-v2, answers with flan-t5-base, run by Transformers.js.
+    Code, evaluation and notebook:
+    <a href="https://github.com/Sammyjoseph999/vibration-monitoring-rag">github.com/Sammyjoseph999/vibration-monitoring-rag</a>
+  </footer>
+</main>
+
+<script type="module">
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+
+const EXAMPLES = [
+  "What is condition monitoring?",
+  "What is the Machine Defender app used for?",
+  "What does the AMS 2140 do?",
+  "How does predictive maintenance differ from preventive maintenance?",
+  "What causes resonance?",
+];
+const MAX_INPUT_TOKENS = 512;
+const MAX_NEW_TOKENS = 64;
+
+const $ = (id) => document.getElementById(id);
+const status = $("status"), bar = $("bar"), chat = $("chat");
+const input = $("question"), send = $("send");
+let index, embedder, generator, history = [], busy = false;
+
+// Download progress across all model files
+const progress = new Map();
+function onProgress(p) {
+  if (p.status === "progress" && p.total) {
+    progress.set(p.file + p.name, [p.loaded, p.total]);
+    let loaded = 0, total = 0;
+    for (const [l, t] of progress.values()) { loaded += l; total += t; }
+    bar.value = Math.round((100 * loaded) / total);
+  }
+}
+
+function escapeHtml(text) {
+  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function embed(text) {
+  const output = await embedder(text, { pooling: "mean", normalize: true });
+  return output.data;
+}
+
+async function search(query, k) {
+  const q = await embed(query);
+  const scored = index.chunks.map((chunk) => {
+    let s = 0;
+    for (let i = 0; i < q.length; i++) s += q[i] * chunk.vector[i];   // cosine: both are unit vectors
+    return { ...chunk, score: s };
+  });
+  return scored.sort((a, b) => b.score - a.score).slice(0, k);
+}
+
+function buildPrompt(question, chunks, turns) {
+  const context = chunks.map((c, i) => `[${i + 1}] (${c.source}) ${c.text}`).join("\n\n");
+  const parts = [index.instructions];
+  if (turns.length) {
+    const lines = turns.slice(-3).flatMap(([q, a]) => [`User: ${q}`, `Assistant: ${a}`]);
+    parts.push("Earlier conversation:\n" + lines.join("\n"));
+  }
+  parts.push("Context:\n" + context);
+  parts.push(`Question: ${question}\nAnswer:`);
+  return parts.join("\n\n");
+}
+
+function trimToSentence(text) {
+  const end = Math.max(text.lastIndexOf(". "), text.lastIndexOf("! "), text.lastIndexOf("? "));
+  if (/[.!?]$/.test(text) || end === -1) return text;
+  return text.slice(0, end + 1);
+}
+
+async function ask(question) {
+  // Follow-ups: search with the previous question as well, as the Python assistant does
+  const query = history.length ? `${history[history.length - 1][0]} ${question}` : question;
+  const chunks = await search(query, index.top_k);
+  if (!chunks.length || chunks[0].score < index.min_score) {
+    return { answer: index.no_answer, sources: [] };
+  }
+  // Drop the lowest-ranked chunks until the prompt fits, so the question is never truncated
+  const kept = [...chunks];
+  while (kept.length > 1 && generator.tokenizer.encode(buildPrompt(question, kept, history)).length > MAX_INPUT_TOKENS) {
+    kept.pop();
+  }
+  const [out] = await generator(buildPrompt(question, kept, history), { max_new_tokens: MAX_NEW_TOKENS });
+  let answer = out.generated_text.trim();
+  if (generator.tokenizer.encode(answer).length >= MAX_NEW_TOKENS - 2) answer = trimToSentence(answer);
+  return { answer, sources: kept };
+}
+
+function addMessage(cls, html) {
+  const div = document.createElement("div");
+  div.className = `msg ${cls}`;
+  div.innerHTML = html;
+  chat.appendChild(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+  return div;
+}
+
+function renderAnswer(div, result) {
+  const none = result.sources.length === 0;
+  div.classList.toggle("none", none);
+  let html = `<div class="answer">${escapeHtml(result.answer)}</div>`;
+  if (none) {
+    html += `<ul class="sources"><li>No source was close enough to answer from.</li></ul>`;
+  } else {
+    html += `<ul class="sources">` + result.sources.map((c) => {
+      const excerpt = c.text.slice(0, 160).replace(/\s+\S*$/, "") + " ...";
+      return `<li><a href="${escapeHtml(c.url)}" target="_blank" rel="noopener">${escapeHtml(c.source)}</a>
+        <span class="score">(similarity ${c.score.toFixed(2)})</span>: ${escapeHtml(excerpt)}</li>`;
+    }).join("") + `</ul>`;
+  }
+  div.innerHTML = html;
+}
+
+async function submit(question) {
+  question = question.trim();
+  if (!question || busy) return;
+  busy = true; setEnabled(false);
+  addMessage("user", escapeHtml(question));
+  const pending = addMessage("bot", `<span class="note">Searching the sources and writing an answer...</span>`);
+  try {
+    const result = await ask(question);
+    history.push([question, result.answer]);
+    renderAnswer(pending, result);
+  } catch (err) {
+    pending.innerHTML = `<span class="note">Something went wrong: ${escapeHtml(String(err))}</span>`;
+  }
+  busy = false; setEnabled(true); input.value = ""; input.focus();
+}
+
+function setEnabled(on) {
+  input.disabled = send.disabled = !on;
+  for (const b of $("examples").children) b.disabled = !on;
+}
+
+$("ask").addEventListener("submit", (e) => { e.preventDefault(); submit(input.value); });
+$("reset").addEventListener("click", () => { history = []; chat.innerHTML = ""; });
+for (const q of EXAMPLES) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "secondary"; b.textContent = q; b.disabled = true;
+  b.addEventListener("click", () => submit(q));
+  $("examples").appendChild(b);
+}
+
+try {
+  [index, embedder, generator] = await Promise.all([
+    fetch("index.json").then((r) => r.json()),
+    pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", { dtype: "fp32", progress_callback: onProgress }),
+    pipeline("text2text-generation", "Xenova/flan-t5-base", { dtype: "q8", progress_callback: onProgress }),
+  ]);
+  status.className = "ready";
+  status.textContent = `Ready: ${index.chunks.length} passages from 8 pages. Ask a question or try an example.`;
+  setEnabled(true);
+  input.focus();
+} catch (err) {
+  status.textContent = `Could not load the models: ${err}. Try reloading the page.`;
+}
+</script>
+</body>
+</html>
