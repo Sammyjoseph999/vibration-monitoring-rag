@@ -8,7 +8,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rag.chunk import chunk_pages, chunk_passages, split_sentences  # noqa: E402
-from rag.generate import NO_ANSWER, build_prompt, load_generator, trim_to_sentence  # noqa: E402
+from rag.compare import compare_models, retrieve_once, summarise  # noqa: E402
+from rag.generate import (  # noqa: E402
+    NO_ANSWER, ChatGenerator, build_prompt, hosted_generators, load_generator, strip_think, trim_to_sentence,
+)
 from rag.index import VectorIndex  # noqa: E402
 from rag.pipeline import Assistant, evaluate_retrieval  # noqa: E402
 from rag.scrape import clean_text, html_to_passages  # noqa: E402
@@ -181,3 +184,46 @@ def test_evaluate_retrieval_reports_hit_rates():
     rows, hits = evaluate_retrieval(index, [("vibration on a bearing", "A"), ("pump sensor", "C")], ks=(1, 3))
     assert rows[0]["rank"] == 1
     assert hits["hit@1"] == 0.5 and hits["hit@3"] == 1.0
+
+
+# --- hosted models and the model comparison --------------------------------
+
+def test_strip_think_removes_reasoning():
+    assert strip_think("<think>\nThe context says X.\n</think>\n\nX is a sensor.") == "X is a sensor."
+    assert strip_think("<THINK>a</THINK>b <think>c</think>d") == "b d"
+    assert strip_think("No reasoning here.") == "No reasoning here."
+    # Ran out of tokens while reasoning: show nothing rather than half a thought
+    assert strip_think("<think>still going") == ""
+
+
+def test_reasoning_models_get_a_token_budget_and_no_temperature():
+    chat = ChatGenerator("placeholder", "llama-3.3-70b-versatile")
+    request = chat.request("Q?", RECORDS[:1])
+    assert request["temperature"] == 0 and request["max_tokens"] == 300
+    reasoning = ChatGenerator("placeholder", "o4-mini", reasoning=True)
+    request = reasoning.request("Q?", RECORDS[:1])
+    assert "temperature" not in request and request["max_completion_tokens"] == 4000
+    assert request["messages"][0]["content"] == build_prompt("Q?", RECORDS[:1])
+
+
+def test_hosted_generators_follow_the_keys():
+    assert hosted_generators({}) == {}
+    groq = hosted_generators({"GROQ_API_KEY": "placeholder", "OPENAI_API_KEY": "placeholder"})
+    assert [g.model_name for g in groq.values()] == ["llama-3.3-70b-versatile", "qwen/qwen3-32b"]
+    assert [g.reasoning for g in groq.values()] == [False, True]
+    openai = hosted_generators({"OPENAI_API_KEY": "placeholder"})
+    assert [g.model_name for g in openai.values()] == ["gpt-4o-mini", "o4-mini"]
+
+
+def test_compare_models_gives_every_model_the_same_chunks():
+    index = VectorIndex(WordCountEmbedder(), RECORDS)
+    retrieved = retrieve_once(index, [("vibration on a bearing", "A"), ("cook a goose", "C")], top_k=2, min_score=0.5)
+    assert retrieved[1]["chunks"] == []   # below the threshold: declined for every model
+    first, second = EchoGenerator(), EchoGenerator()
+    rows = compare_models({"first": first, "second": second}, retrieved)
+    assert [r["model"] for r in rows] == ["first", "second", "first", "second"]
+    assert first.calls == second.calls == [("vibration on a bearing", [])]
+    assert rows[0]["expected_source_used"] and not rows[0]["declined"]
+    assert rows[2]["answer"] == NO_ANSWER and rows[2]["declined"]
+    summary = summarise(rows)
+    assert summary["first"]["questions"] == 2 and summary["first"]["declined"] == 1

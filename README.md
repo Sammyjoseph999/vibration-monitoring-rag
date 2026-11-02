@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/Sammyjoseph999/vibration-monitoring-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/Sammyjoseph999/vibration-monitoring-rag/actions/workflows/tests.yml)
 
-**[Try the live demo](https://huggingface.co/spaces/sammyjoseph/vibration-monitoring-assistant)**: runs in your browser, no sign-up or API key.
+**[Try the live demo](https://huggingface.co/spaces/sammyjoseph/vibration-monitoring-assistant)**: runs in your browser, no sign-up or API key. Visitors can optionally paste their own Groq or OpenAI key to have a hosted model write the answers.
 
 A retrieval-augmented question-answering assistant for vibration monitoring and condition-monitoring products. It reads a set of web pages (vendor product pages and background articles), indexes them, and answers questions using only what it retrieved, listing the sources behind each answer.
 
@@ -56,6 +56,16 @@ export OPENAI_API_KEY="your-key"    # uses gpt-4o-mini
 
 Keys are read from the environment only. Never put a key in a notebook cell.
 
+### Comparing answer models
+
+`scripts/compare_models.py` answers the ten evaluation questions in `rag/sources.py` with flan-t5-base, a hosted chat model and a hosted reasoning model (Groq: Llama 3.3 70B and Qwen3 32B; OpenAI: GPT-4o mini and o4-mini). Retrieval runs once per question and every model gets the same passages. It needs `GROQ_API_KEY` or `OPENAI_API_KEY` in the environment or in a `.env` file at the repository root, and writes every answer to `results/model_comparison.csv`.
+
+```bash
+python scripts/compare_models.py
+```
+
+The comparison has not been run yet, so there are no results for it here.
+
 Using it from Python:
 
 ```python
@@ -80,6 +90,8 @@ There are two versions of the same assistant: the same sources, chunks, models, 
 `web/index.html` runs both models in the visitor's browser with [Transformers.js](https://huggingface.co/docs/transformers.js), so it can be hosted as a free static page and nothing typed leaves the browser. The passages are embedded in advance by `web/build_index.py`, which uses the same `rag` package as everything else; questions are embedded in the browser with the same model, and the similarity scores match the Python index. The first visit downloads about 370 MB of model files, which the browser then caches.
 
 Two differences from the Python version: answers use greedy decoding rather than beam search, and the answer model is an 8-bit quantised copy of flan-t5-base.
+
+**Optional hosted model.** Under "Optional: answer with a hosted model", a visitor can pick a Groq or OpenAI model (a chat model or a reasoning model) and paste their own key. Retrieval, the prompt and the refusal threshold stay the same, so only the answer model changes. Hosted models get all four retrieved passages (no 512-token trimming), as `ChatGenerator` does in Python, and any `<think>` section from a reasoning model is removed. The key is held only in the page's memory (never saved, gone on reload) and is sent only to the chosen provider, together with the question, earlier conversation and retrieved passages. Without a key, or if the provider returns an error, the local model answers and the page says so under the answer.
 
 ```bash
 python web/build_index.py           # writes web/index.json
@@ -106,14 +118,14 @@ pip install -r requirements-test.txt
 pytest
 ```
 
-The 19 tests cover cleaning, chunking, search, prompt construction, generator selection and the assistant's memory and refusal behaviour. They use small stand-in models, so they need no network access and no downloads.
+The 23 tests cover cleaning, chunking, search, prompt construction, generator selection, removing reasoning models' `<think>` sections, the model comparison, and the assistant's memory and refusal behaviour. They use small stand-in models, so they need no network access and no downloads.
 
 ## Limits and next steps
 
 - `flan-t5-base` mostly copies a sentence or two from the context. It is easy to verify but does not compare or summarise across sources.
 - The similarity threshold for declining (0.25) was set by inspection.
 - Vendor pages change, so answers will drift over time.
-- Next: add PDF manuals as a source, build a larger question set with graded answers, and add a reranker for product comparisons.
+- Next: run the hosted-model comparison, add PDF manuals as a source, build a larger question set with graded answers, and add a reranker for product comparisons.
 
 ## Sources
 

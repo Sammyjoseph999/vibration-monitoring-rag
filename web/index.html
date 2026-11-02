@@ -59,6 +59,19 @@
   #examples button { font-size: 0.85rem; padding: 6px 10px; }
   .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; }
   .note { font-size: 0.8rem; color: var(--muted); }
+  details#hosted {
+    margin-top: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  }
+  details#hosted summary { cursor: pointer; font-weight: 600; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 6px; }
+  .fields label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+  .fields label.wide { grid-column: 1 / -1; }
+  select, input[type="password"] {
+    font: inherit; padding: 8px 10px; border-radius: 8px; min-width: 0;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  @media (max-width: 520px) { .fields { grid-template-columns: 1fr; } }
+  .model { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
   footer { margin-top: 28px; font-size: 0.85rem; color: var(--muted); }
   footer a { color: var(--accent); }
 </style>
@@ -69,7 +82,7 @@
   <p class="intro">
     Answers questions about vibration monitoring and condition-monitoring products using only four vendor pages and
     four Wikipedia articles, and shows the passages behind each answer. It declines questions the sources don't cover.
-    Both models run in your browser; nothing you type is sent to a server.
+    Both models run in your browser, so by default nothing you type is sent to a server.
   </p>
 
   <div id="status">Loading the models (about 370 MB on the first visit, cached after that)...
@@ -88,8 +101,32 @@
     <button id="reset" class="secondary" type="button">New conversation</button>
   </div>
 
+  <details id="hosted">
+    <summary>Optional: answer with a hosted model using your own key</summary>
+    <div class="fields">
+      <label>Model
+        <select id="hosted-model">
+          <option value="">None: the local model in your browser</option>
+          <option value="groq|llama-3.3-70b-versatile|chat">Groq: Llama 3.3 70B (chat)</option>
+          <option value="groq|qwen/qwen3-32b|reasoning">Groq: Qwen3 32B (reasoning)</option>
+          <option value="openai|gpt-4o-mini|chat">OpenAI: GPT-4o mini (chat)</option>
+          <option value="openai|o4-mini|reasoning">OpenAI: o4-mini (reasoning)</option>
+        </select>
+      </label>
+      <label>API key for that provider
+        <input id="hosted-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+      </label>
+    </div>
+    <p class="note">
+      Retrieval, the prompt and the refusal threshold stay the same; only the answer model changes. With a key, your
+      question, the earlier conversation and the retrieved passages are sent from your browser straight to that provider,
+      and the provider's terms and charges apply. The key is kept only in this page's memory: it is not saved, and it is
+      gone when you close or reload the page. Without a key, or if the provider returns an error, the local model answers.
+    </p>
+  </details>
+
   <footer>
-    Retrieval with all-MiniLM-L6-v2, answers with flan-t5-base, run by Transformers.js.
+    Retrieval with all-MiniLM-L6-v2, answers with flan-t5-base (or the hosted model you choose), run by Transformers.js.
     Code, evaluation and notebook:
     <a href="https://github.com/Sammyjoseph999/vibration-monitoring-rag">github.com/Sammyjoseph999/vibration-monitoring-rag</a>
   </footer>
@@ -107,6 +144,10 @@ const EXAMPLES = [
 ];
 const MAX_INPUT_TOKENS = 512;
 const MAX_NEW_TOKENS = 64;
+const PROVIDERS = {
+  groq: "https://api.groq.com/openai/v1/chat/completions",
+  openai: "https://api.openai.com/v1/chat/completions",
+};
 
 const $ = (id) => document.getElementById(id);
 const status = $("status"), bar = $("bar"), chat = $("chat");
@@ -161,13 +202,33 @@ function trimToSentence(text) {
   return text.slice(0, end + 1);
 }
 
-async function ask(question) {
-  // Follow-ups: search with the previous question as well, as the Python assistant does
-  const query = history.length ? `${history[history.length - 1][0]} ${question}` : question;
-  const chunks = await search(query, index.top_k);
-  if (!chunks.length || chunks[0].score < index.min_score) {
-    return { answer: index.no_answer, sources: [] };
-  }
+// Remove a reasoning model's <think> section; an unclosed one (out of tokens) removes the rest
+function stripThink(text) {
+  return text.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "").trim();
+}
+
+function hostedChoice() {
+  const [provider, model, kind] = $("hosted-model").value.split("|");
+  const key = $("hosted-key").value.trim();
+  return provider && key ? { provider, model, reasoning: kind === "reasoning", key } : null;
+}
+
+// Same request as the Python ChatGenerator: one user message, all retrieved chunks
+async function askHosted(choice, prompt) {
+  const body = { model: choice.model, messages: [{ role: "user", content: prompt }] };
+  if (choice.reasoning) body.max_completion_tokens = 4000;
+  else Object.assign(body, { max_tokens: 300, temperature: 0 });
+  const response = await fetch(PROVIDERS[choice.provider], {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${choice.key}` },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${data.error?.message ?? response.statusText}`);
+  return stripThink(data.choices?.[0]?.message?.content ?? "");
+}
+
+async function askLocal(question, chunks) {
   // Drop the lowest-ranked chunks until the prompt fits, so the question is never truncated
   const kept = [...chunks];
   while (kept.length > 1 && generator.tokenizer.encode(buildPrompt(question, kept, history)).length > MAX_INPUT_TOKENS) {
@@ -176,7 +237,29 @@ async function ask(question) {
   const [out] = await generator(buildPrompt(question, kept, history), { max_new_tokens: MAX_NEW_TOKENS });
   let answer = out.generated_text.trim();
   if (generator.tokenizer.encode(answer).length >= MAX_NEW_TOKENS - 2) answer = trimToSentence(answer);
-  return { answer, sources: kept };
+  return { answer, sources: kept, model: "flan-t5-base, in your browser" };
+}
+
+async function ask(question) {
+  // Follow-ups: search with the previous question as well, as the Python assistant does
+  const query = history.length ? `${history[history.length - 1][0]} ${question}` : question;
+  const chunks = await search(query, index.top_k);
+  if (!chunks.length || chunks[0].score < index.min_score) {
+    return { answer: index.no_answer, sources: [], model: "" };
+  }
+  const choice = hostedChoice();
+  if (choice) {
+    try {
+      const answer = await askHosted(choice, buildPrompt(question, chunks, history));
+      if (answer) return { answer, sources: chunks, model: `${choice.model}, via ${choice.provider}` };
+      throw new Error("empty answer");
+    } catch (err) {
+      const local = await askLocal(question, chunks);
+      local.model += ` (the hosted model failed: ${err.message})`;
+      return local;
+    }
+  }
+  return askLocal(question, chunks);
 }
 
 function addMessage(cls, html) {
@@ -201,6 +284,7 @@ function renderAnswer(div, result) {
         <span class="score">(similarity ${c.score.toFixed(2)})</span>: ${escapeHtml(excerpt)}</li>`;
     }).join("") + `</ul>`;
   }
+  if (result.model) html += `<div class="model">Answered by ${escapeHtml(result.model)}</div>`;
   div.innerHTML = html;
 }
 
