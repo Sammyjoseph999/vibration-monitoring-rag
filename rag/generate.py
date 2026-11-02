@@ -6,6 +6,7 @@ environment switches to a hosted chat model, which gives better answers.
 Keys are only ever read from the environment.
 """
 import os
+import re
 
 DEFAULT_LOCAL_MODEL = "google/flan-t5-base"
 NO_ANSWER = "I don't know based on the sources I have."
@@ -41,6 +42,18 @@ def trim_to_sentence(text):
     if text.endswith((".", "!", "?")) or end == -1:
         return text
     return text[:end + 1]
+
+
+THINK_BLOCK = re.compile(r"<think>.*?(</think>|$)", flags=re.DOTALL | re.IGNORECASE)
+
+
+def strip_think(text):
+    """Remove a reasoning model's <think> section, keeping only the final answer.
+
+    An unclosed <think> (the model ran out of tokens while reasoning) removes
+    everything after it, so a half-finished thought is never shown as an answer.
+    """
+    return THINK_BLOCK.sub("", text).strip()
 
 
 class LocalGenerator:
@@ -80,24 +93,61 @@ class LocalGenerator:
 
 
 class ChatGenerator:
-    """A hosted chat model reached through the OpenAI-compatible API."""
+    """A hosted chat model reached through the OpenAI-compatible API.
+
+    Set reasoning=True for reasoning models: they get a larger token budget for
+    their hidden reasoning, no temperature setting (OpenAI's reasoning models
+    reject it), and any <think> section is removed from the answer.
+    """
 
     name = "chat"
 
-    def __init__(self, api_key, model_name, base_url=None, max_tokens=300):
+    def __init__(self, api_key, model_name, base_url=None, max_tokens=300, reasoning=False):
         from openai import OpenAI
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model_name = model_name
-        self.max_tokens = max_tokens
+        self.reasoning = reasoning
+        self.max_tokens = 4000 if reasoning and max_tokens == 300 else max_tokens
+
+    def request(self, question, chunks, history=()):
+        """The keyword arguments sent to the chat completions endpoint."""
+        kwargs = {"model": self.model_name,
+                  "messages": [{"role": "user", "content": build_prompt(question, chunks, history)}]}
+        if self.reasoning:
+            kwargs["max_completion_tokens"] = self.max_tokens
+        else:
+            kwargs.update(max_tokens=self.max_tokens, temperature=0)
+        return kwargs
 
     def generate(self, question, chunks, history=()):
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[{"role": "user", "content": build_prompt(question, chunks, history)}],
-            max_tokens=self.max_tokens,
-            temperature=0,
-        )
-        return response.choices[0].message.content.strip(), list(chunks)
+        response = self.client.chat.completions.create(**self.request(question, chunks, history))
+        return strip_think(response.choices[0].message.content or ""), list(chunks)
+
+
+# Hosted models for each provider: (chat model, reasoning model)
+HOSTED_MODELS = {
+    "groq": {"base_url": "https://api.groq.com/openai/v1", "key": "GROQ_API_KEY",
+             "chat": "llama-3.3-70b-versatile", "reasoning": "qwen/qwen3-32b"},
+    "openai": {"base_url": None, "key": "OPENAI_API_KEY",
+               "chat": "gpt-4o-mini", "reasoning": "o4-mini"},
+}
+
+
+def hosted_generators(environ=None):
+    """The hosted chat and reasoning generators for the first provider with a key set.
+
+    Returns an empty dict when no key is set.
+    """
+    environ = os.environ if environ is None else environ
+    for provider, config in HOSTED_MODELS.items():
+        key = environ.get(config["key"])
+        if key:
+            return {
+                f"{provider} chat ({config['chat']})": ChatGenerator(key, config["chat"], config["base_url"]),
+                f"{provider} reasoning ({config['reasoning']})":
+                    ChatGenerator(key, config["reasoning"], config["base_url"], reasoning=True),
+            }
+    return {}
 
 
 def load_generator():
